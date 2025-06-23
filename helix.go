@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	url2 "net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -141,40 +142,44 @@ func NewClientWithContext(ctx context.Context, options *Options) (*Client, error
 }
 
 func (c *Client) get(path string, respData, reqData interface{}) (*Response, error) {
-	return c.sendRequest(http.MethodGet, path, respData, reqData, false)
+	return c.sendRequest(http.MethodGet, path, respData, reqData, "query")
 }
 
 func (c *Client) post(path string, respData, reqData interface{}) (*Response, error) {
-	return c.sendRequest(http.MethodPost, path, respData, reqData, false)
+	return c.sendRequest(http.MethodPost, path, respData, reqData, "query")
 }
 
 func (c *Client) put(path string, respData, reqData interface{}) (*Response, error) {
-	return c.sendRequest(http.MethodPut, path, respData, reqData, false)
+	return c.sendRequest(http.MethodPut, path, respData, reqData, "query")
 }
 
 func (c *Client) delete(path string, respData, reqData interface{}) (*Response, error) {
-	return c.sendRequest(http.MethodDelete, path, respData, reqData, false)
+	return c.sendRequest(http.MethodDelete, path, respData, reqData, "query")
 }
 
 func (c *Client) patchAsJSON(path string, respData, reqData interface{}) (*Response, error) {
-	return c.sendRequest(http.MethodPatch, path, respData, reqData, true)
+	return c.sendRequest(http.MethodPatch, path, respData, reqData, "json")
 }
 
 func (c *Client) postAsJSON(path string, respData, reqData interface{}) (*Response, error) {
-	return c.sendRequest(http.MethodPost, path, respData, reqData, true)
+	return c.sendRequest(http.MethodPost, path, respData, reqData, "json")
 }
 
 func (c *Client) putAsJSON(path string, respData, reqData interface{}) (*Response, error) {
-	return c.sendRequest(http.MethodPut, path, respData, reqData, true)
+	return c.sendRequest(http.MethodPut, path, respData, reqData, "json")
 }
 
-func (c *Client) sendRequest(method, path string, respData, reqData interface{}, hasJSONBody bool) (*Response, error) {
+func (c *Client) postAsForm(path string, respData, reqData interface{}) (*Response, error) {
+	return c.sendRequest(http.MethodPost, path, respData, reqData, "form")
+}
+
+func (c *Client) sendRequest(method, path string, respData, reqData interface{}, bodyType string) (*Response, error) {
 	resp := &Response{}
 	if respData != nil {
 		resp.Data = respData
 	}
 
-	req, err := c.newRequest(method, path, reqData, hasJSONBody)
+	req, err := c.newRequest(method, path, reqData, bodyType)
 	if err != nil {
 		return nil, err
 	}
@@ -185,6 +190,38 @@ func (c *Client) sendRequest(method, path string, respData, reqData interface{},
 	}
 
 	return resp, nil
+}
+
+func generateFormData(data interface{}) (url2.Values, error) {
+	isNil, err := isZero(data)
+	if err != nil {
+		return nil, err
+	}
+
+	if isNil {
+		return nil, nil
+	}
+
+	formData := url2.Values{}
+
+	vType := reflect.TypeOf(data).Elem()
+	vValue := reflect.ValueOf(data).Elem()
+
+	for i := 0; i < vType.NumField(); i++ {
+		field := vType.Field(i)
+		tag := field.Tag.Get("form")
+
+		if tag == "" {
+			continue
+		}
+
+		fieldVal := vValue.Field(i)
+		fieldValStr := fmt.Sprintf("%v", fieldVal)
+
+		formData.Add(tag, fieldValStr)
+	}
+
+	return formData, nil
 }
 
 func buildQueryString(req *http.Request, v interface{}) (string, error) {
@@ -276,14 +313,45 @@ func isZero(v interface{}) (bool, error) {
 	return v == reflect.Zero(t).Interface(), nil
 }
 
-func (c *Client) newRequest(method, path string, data interface{}, hasJSONBody bool) (*http.Request, error) {
+func (c *Client) newRequest(method, path string, data interface{}, bodyType string) (*http.Request, error) {
 	url := c.getBaseURL(path) + path
 
-	if hasJSONBody {
+	switch bodyType {
+	case "json":
 		return c.newJSONRequest(method, url, data)
+	case "form":
+		return c.newFormRequest(method, url, data)
+	case "query":
+		fallthrough
+	default:
+		return c.newStandardRequest(method, url, data)
+	}
+}
+
+func (c *Client) newFormRequest(method, url string, data interface{}) (*http.Request, error) {
+
+	formData, err := generateFormData(data)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(c.ctx, method, url, strings.NewReader(formData.Encode()))
+	if err != nil {
+		return nil, err
 	}
 
-	return c.newStandardRequest(method, url, data)
+	if data == nil {
+		return req, nil
+	}
+
+	query, err := buildQueryString(req, data)
+	if err != nil {
+		return nil, err
+	}
+
+	req.URL.RawQuery = query
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	return req, nil
 }
 
 func (c *Client) newStandardRequest(method, url string, data interface{}) (*http.Request, error) {

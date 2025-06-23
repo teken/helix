@@ -9,6 +9,7 @@ var authPaths = map[string]string{
 	"token":    "/token",
 	"revoke":   "/revoke",
 	"validate": "/validate",
+	"device":   "/device",
 }
 
 type AuthorizationURLParams struct {
@@ -101,6 +102,37 @@ func (c *Client) RequestUserAccessToken(code string) (*UserAccessTokenResponse, 
 	}
 
 	resp, err := c.post(authPaths["token"], &AccessCredentials{}, data)
+	if err != nil {
+		return nil, err
+	}
+
+	token := &UserAccessTokenResponse{}
+	resp.HydrateResponseCommon(&token.ResponseCommon)
+	token.Data.AccessToken = resp.Data.(*AccessCredentials).AccessToken
+	token.Data.RefreshToken = resp.Data.(*AccessCredentials).RefreshToken
+	token.Data.ExpiresIn = resp.Data.(*AccessCredentials).ExpiresIn
+	token.Data.Scopes = resp.Data.(*AccessCredentials).Scopes
+
+	return token, nil
+}
+
+type accessTokenDeviceCodeRequestData struct {
+	DeviceCode string `form:"device_code"`
+	ClientID   string `form:"client_id"`
+	GrantType  string `form:"grant_type"`
+	Scopes     string `form:"scope"`
+}
+
+func (c *Client) RequestUserAccessTokenWithDeviceCode(deviceCode string, scopes ...string) (*UserAccessTokenResponse, error) {
+	opts := c.opts
+	data := &accessTokenDeviceCodeRequestData{
+		DeviceCode: deviceCode,
+		Scopes:     strings.Join(scopes, " "),
+		ClientID:   opts.ClientID,
+		GrantType:  "urn:ietf:params:oauth:grant-type:device_code",
+	}
+
+	resp, err := c.postAsForm(authPaths["token"], &AccessCredentials{}, data)
 	if err != nil {
 		return nil, err
 	}
@@ -223,4 +255,55 @@ func (c *Client) ValidateToken(accessToken string) (bool, *ValidateTokenResponse
 	resp.HydrateResponseCommon(&tokenResp.ResponseCommon)
 
 	return isValid, tokenResp, nil
+}
+
+type DeviceCodeGrantParams struct {
+	ClientID string
+	Scopes   []string
+}
+
+type DeviceCodeGrantResponse struct {
+	ResponseCommon
+	Data DeviceCodeGrantDetails
+}
+
+type DeviceCodeGrantDetails struct {
+	// 	The identifier for a given user.
+	DeviceCode string `json:"device_code"`
+	// Time until the code is no longer valid
+	ExpiresIn int `json:"expires_in"`
+	// Time until another valid code can be requested
+	Interval int `json:"interval"`
+	// The code that the user will use to authenticate
+	UserCode string `json:"user_code"`
+	// The address you will send users to, to authenticate
+	VerificationURI string `json:"verification_uri"`
+}
+
+type DeviceCodeGrantRequestData struct {
+	ClientID string `form:"client_id"`
+	Scopes   string `form:"scope"`
+}
+
+func (c *Client) GetDeviceCode(scopes ...string) (*DeviceCodeGrantResponse, error) {
+	data := &DeviceCodeGrantRequestData{
+		ClientID: c.opts.ClientID,
+		Scopes:   strings.Join(scopes, " "),
+	}
+
+	resp, err := c.postAsForm(authPaths["device"], &DeviceCodeGrantDetails{}, data)
+	if err != nil {
+		return nil, err
+	}
+
+	deviceCodeResp := &DeviceCodeGrantResponse{}
+	resp.HydrateResponseCommon(&deviceCodeResp.ResponseCommon)
+	deviceCodeResp.Data.DeviceCode = resp.Data.(*DeviceCodeGrantDetails).DeviceCode
+	deviceCodeResp.Data.ExpiresIn = resp.Data.(*DeviceCodeGrantDetails).ExpiresIn
+	deviceCodeResp.Data.Interval = resp.Data.(*DeviceCodeGrantDetails).Interval
+	deviceCodeResp.Data.UserCode = resp.Data.(*DeviceCodeGrantDetails).UserCode
+	deviceCodeResp.Data.VerificationURI = resp.Data.(*DeviceCodeGrantDetails).VerificationURI
+
+	return deviceCodeResp, nil
+
 }
